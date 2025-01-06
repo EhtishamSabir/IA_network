@@ -2,132 +2,165 @@
 pragma solidity ^0.8.19;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "./Escrow.sol";
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
-contract Escrow is ReentrancyGuard {
-    struct EscrowDetails {
-        address sender;
-        address recipient;
-        uint256 amount;
-        uint256 deadline;
-        address token; // Address(0) for ETH
-        bool claimed;
+contract MockERC20 is ERC20 {
+    constructor() ERC20("MockToken", "MKT") {
+        _mint(msg.sender, 1_000_000 ether); // Mint initial tokens
+    }
+}
+
+contract EscrowTest {
+    Escrow public escrow;
+    MockERC20 public token;
+
+    address public sender = address(1);
+    address public recipient = address(2);
+    uint256 public escrowId;
+
+    // Set up the environment
+    function setUp() public {
+        // Deploy Escrow and MockERC20 contracts
+        escrow = new Escrow();
+        token = new MockERC20();
+
+        // Allocate ETH to sender (simulate in test environment)
+        payable(sender).transfer(100 ether);
+
+        // Allocate tokens to sender
+        token.transfer(sender, 500 ether);
     }
 
-    mapping(uint256 => EscrowDetails) public escrows;
-    uint256 public escrowCounter;
+    // Test ETH escrow creation
+    function testCreateEscrowETH() public {
+        uint256 amount = 10 ether;
 
-    event FundsEscrowed(
-        uint256 indexed escrowId,
-        address indexed sender,
-        address indexed recipient,
-        uint256 amount,
-        address token,
-        uint256 deadline
-    );
-    event FundsClaimed(uint256 indexed escrowId, address indexed recipient);
-    event FundsRefunded(uint256 indexed escrowId, address indexed sender);
+        // Create escrow (simulate transaction)
+        payable(sender).transfer(amount);
+        escrow.createEscrow{value: amount}(recipient, amount, address(0));
 
-    /**
-     * @notice Create a new escrow
-     * @param recipient The recipient address for the escrowed funds
-     * @param amount The amount to escrow
-     * @param token The address of the token to escrow (address(0) for ETH)
-     */
-    function createEscrow(address recipient, uint256 amount, address token)
-        external
-        payable
-    {
-        require(recipient != address(0), "Invalid recipient");
-        require(amount > 0, "Amount must be greater than zero");
+        // Store the last escrowId created
+        escrowId = escrow.escrowCounter() - 1;
 
-        if (token == address(0)) {
-            // ETH escrow
-            require(msg.value == amount, "Incorrect ETH sent");
-        } else {
-            // ERC20 escrow
-            IERC20(token).transferFrom(msg.sender, address(this), amount);
-        }
-
-        uint256 deadline = block.timestamp + 30 days;
-
-        escrows[escrowCounter] = EscrowDetails({
-            sender: msg.sender,
-            recipient: recipient,
-            amount: amount,
-            deadline: deadline,
-            token: token,
-            claimed: false
-        });
-
-        emit FundsEscrowed(
-            escrowCounter,
-            msg.sender,
-            recipient,
-            amount,
-            token,
-            deadline
-        );
-
-        escrowCounter++;
+        // Verify escrow details
+        (address escrowSender, address escrowRecipient, uint256 escrowAmount, uint256 escrowDeadline, address escrowToken, bool escrowClaimed) = escrow.getEscrowDetails(escrowId);
+        assert(escrowSender == sender);
+        assert(escrowRecipient == recipient);
+        assert(escrowAmount == amount);
+        assert(escrowToken == address(0));
+        assert(escrowClaimed == false);
     }
 
-    /**
-     * @notice Claim escrowed funds
-     * @param escrowId The ID of the escrow to claim
-     */
-    function claimFunds(uint256 escrowId) external nonReentrant {
-        EscrowDetails storage escrow = escrows[escrowId];
-        require(msg.sender == escrow.recipient, "Not the recipient");
-        require(block.timestamp <= escrow.deadline, "Deadline passed");
-        require(!escrow.claimed, "Already claimed");
+    // Test claiming ETH escrow funds
+    function testClaimEscrowETH() public {
+        uint256 amount = 10 ether;
 
-        escrow.claimed = true;
+        // Create escrow
+        escrow.createEscrow{value: amount}(recipient, amount, address(0));
 
-        if (escrow.token == address(0)) {
-            // Send ETH
-            payable(msg.sender).transfer(escrow.amount);
-        } else {
-            // Send ERC20 tokens
-            IERC20(escrow.token).transfer(msg.sender, escrow.amount);
-        }
+        // Store the last escrowId created
+        escrowId = escrow.escrowCounter() - 1;
 
-        emit FundsClaimed(escrowId, msg.sender);
+        // Claim funds
+        escrow.claimFunds(escrowId);
+
+        // Verify recipient balance
+        assert(recipient.balance == amount);
+
+        // Verify escrow marked as claimed
+        (, , , , , bool escrowClaimed) = escrow.getEscrowDetails(escrowId);
+        assert(escrowClaimed == true);
     }
 
-    /**
-     * @notice Refund escrowed funds back to the sender
-     * @param escrowId The ID of the escrow to refund
-     */
-    function refundFunds(uint256 escrowId) external nonReentrant {
-        EscrowDetails storage escrow = escrows[escrowId];
-        require(msg.sender == escrow.sender, "Not the sender");
-        require(block.timestamp > escrow.deadline, "Deadline not passed");
-        require(!escrow.claimed, "Already claimed");
+    // Test refunding ETH escrow funds after the deadline
+    function testRefundEscrowETH() public {
+        uint256 amount = 10 ether;
 
-        escrow.claimed = true;
+        // Create escrow
+        escrow.createEscrow{value: amount}(recipient, amount, address(0));
 
-        if (escrow.token == address(0)) {
-            // Refund ETH
-            payable(msg.sender).transfer(escrow.amount);
-        } else {
-            // Refund ERC20 tokens
-            IERC20(escrow.token).transfer(msg.sender, escrow.amount);
-        }
+        // Store the last escrowId created
+        escrowId = escrow.escrowCounter() - 1;
 
-        emit FundsRefunded(escrowId, msg.sender);
+        // Advance time beyond the deadline (simulate using `vm.warp()` if using Foundry or Hardhat)
+        // block.timestamp = block.timestamp + 31 days; // This won't work directly in Remix
+
+        // Refund funds (You'd need to simulate time in a testing framework like Foundry or Hardhat)
+        escrow.refundFunds(escrowId);
+
+        // Verify sender balance (should have received the funds back)
+        assert(sender.balance == 100 ether);
+
+        // Verify escrow marked as claimed
+        (, , , , , bool escrowClaimed) = escrow.getEscrowDetails(escrowId);
+        assert(escrowClaimed == true);
     }
 
-    /**
-     * @notice Get details of an escrow
-     * @param escrowId The ID of the escrow to query
-     * @return EscrowDetails The details of the escrow
-     */
-    function getEscrowDetails(uint256 escrowId)
-        external
-        view
-        returns (EscrowDetails memory)
-    {
-        return escrows[escrowId];
+    // Test ERC20 escrow creation
+    function testCreateEscrowERC20() public {
+        uint256 amount = 50 ether;
+
+        // Approve and create escrow
+        token.approve(address(escrow), amount);
+        escrow.createEscrow(recipient, amount, address(token));
+
+        // Store the last escrowId created
+        escrowId = escrow.escrowCounter() - 1;
+
+        // Verify escrow details
+        (address escrowSender, address escrowRecipient, uint256 escrowAmount, uint256 escrowDeadline, address escrowToken, bool escrowClaimed) = escrow.getEscrowDetails(escrowId);
+        assert(escrowSender == sender);
+        assert(escrowRecipient == recipient);
+        assert(escrowAmount == amount);
+        assert(escrowToken == address(token));
+        assert(escrowClaimed == false);
+    }
+
+    // Test claiming ERC20 escrow funds
+    function testClaimEscrowERC20() public {
+        uint256 amount = 50 ether;
+
+        // Approve and create escrow
+        token.approve(address(escrow), amount);
+        escrow.createEscrow(recipient, amount, address(token));
+
+        // Store the last escrowId created
+        escrowId = escrow.escrowCounter() - 1;
+
+        // Claim funds
+        escrow.claimFunds(escrowId);
+
+        // Verify recipient token balance
+        assert(token.balanceOf(recipient) == amount);
+
+        // Verify escrow marked as claimed
+        (, , , , , bool escrowClaimed) = escrow.getEscrowDetails(escrowId);
+        assert(escrowClaimed == true);
+    }
+
+    // Test refunding ERC20 escrow funds after the deadline
+    function testRefundEscrowERC20() public {
+        uint256 amount = 50 ether;
+
+        // Approve and create escrow
+        token.approve(address(escrow), amount);
+        escrow.createEscrow(recipient, amount, address(token));
+
+        // Store the last escrowId created
+        escrowId = escrow.escrowCounter() - 1;
+
+        // Advance time beyond the deadline (simulate using `vm.warp()` if using Foundry or Hardhat)
+        // block.timestamp = block.timestamp + 31 days; // This won't work directly in Remix
+
+        // Refund funds (You'd need to simulate time in a testing framework like Foundry or Hardhat)
+        escrow.refundFunds(escrowId);
+
+        // Verify sender token balance (should have received the tokens back)
+        assert(token.balanceOf(sender) == amount);
+
+        // Verify escrow marked as claimed
+        (, , , , , bool escrowClaimed) = escrow.getEscrowDetails(escrowId);
+        assert(escrowClaimed == true);
     }
 }

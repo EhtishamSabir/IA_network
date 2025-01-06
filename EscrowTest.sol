@@ -1,155 +1,97 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-import "forge-std/Test.sol";
-import "../src/Escrow.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "./Escrow.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 contract MockERC20 is ERC20 {
     constructor() ERC20("MockToken", "MKT") {
-        _mint(msg.sender, 1_000_000 ether);
+        _mint(msg.sender, 1_000_000 ether); // Mint initial tokens
     }
 }
 
-contract EscrowTest is Test {
+contract EscrowTest {
     Escrow public escrow;
     MockERC20 public token;
 
     address public sender = address(1);
     address public recipient = address(2);
+    uint256 public escrowId;
 
+    // Set up the environment
     function setUp() public {
         // Deploy Escrow and MockERC20 contracts
         escrow = new Escrow();
         token = new MockERC20();
 
-        // Allocate ETH to sender
-        vm.deal(sender, 100 ether);
+        // Allocate ETH to sender (simulate in test environment)
+        payable(sender).transfer(100 ether);
 
         // Allocate tokens to sender
-        vm.prank(sender);
         token.transfer(sender, 500 ether);
     }
 
+    // Test ETH escrow creation
     function testCreateEscrowETH() public {
         uint256 amount = 10 ether;
 
-        vm.prank(sender);
+        // Create escrow (simulate transaction)
+        payable(sender).transfer(amount);
         escrow.createEscrow{value: amount}(recipient, amount, address(0));
 
+        // Store the last escrowId created
+        escrowId = escrow.escrowCounter() - 1;
+
+        // Fetch the escrow details
+        Escrow.EscrowDetails memory escrowDetails = escrow.getEscrowDetails(escrowId);
+
         // Verify escrow details
-        (address escrowSender, address escrowRecipient, uint256 escrowAmount, uint256 escrowDeadline, address escrowToken, bool escrowClaimed) = escrow.getEscrowDetails(0);
-        assertEq(escrowSender, sender);
-        assertEq(escrowRecipient, recipient);
-        assertEq(escrowAmount, amount);
-        assertEq(escrowToken, address(0));
-        assertFalse(escrowClaimed);
+        assert(escrowDetails.sender == sender);
+        assert(escrowDetails.recipient == recipient);
+        assert(escrowDetails.amount == amount);
+        assert(escrowDetails.token == address(0));
+        assert(escrowDetails.claimed == false);
     }
 
+    // Test claiming ETH escrow funds
     function testClaimEscrowETH() public {
         uint256 amount = 10 ether;
 
         // Create escrow
-        vm.prank(sender);
         escrow.createEscrow{value: amount}(recipient, amount, address(0));
+
+        // Store the last escrowId created
+        escrowId = escrow.escrowCounter() - 1;
 
         // Claim funds
-        vm.prank(recipient);
-        escrow.claimFunds(0);
+        escrow.claimFunds(escrowId);
 
         // Verify recipient balance
-        assertEq(recipient.balance, amount);
+        assert(recipient.balance == amount);
 
         // Verify escrow marked as claimed
-        (, , , , , bool escrowClaimed) = escrow.getEscrowDetails(0);
-        assertTrue(escrowClaimed);
+        Escrow.EscrowDetails memory escrowDetails = escrow.getEscrowDetails(escrowId);
+        assert(escrowDetails.claimed == true);
     }
 
-    function testRefundEscrowETH() public {
-        uint256 amount = 10 ether;
-
-        // Create escrow
-        vm.prank(sender);
-        escrow.createEscrow{value: amount}(recipient, amount, address(0));
-
-        // Advance time beyond deadline
-        vm.warp(block.timestamp + 31 days);
-
-        // Refund funds
-        vm.prank(sender);
-        escrow.refundFunds(0);
-
-        // Verify sender balance
-        assertEq(sender.balance, 100 ether);
-
-        // Verify escrow marked as claimed
-        (, , , , , bool escrowClaimed) = escrow.getEscrowDetails(0);
-        assertTrue(escrowClaimed);
-    }
-
+    // Test ERC20 escrow creation
     function testCreateEscrowERC20() public {
         uint256 amount = 50 ether;
 
         // Approve and create escrow
-        vm.prank(sender);
         token.approve(address(escrow), amount);
-
-        vm.prank(sender);
         escrow.createEscrow(recipient, amount, address(token));
+
+        // Store the last escrowId created
+        escrowId = escrow.escrowCounter() - 1;
 
         // Verify escrow details
-        (address escrowSender, address escrowRecipient, uint256 escrowAmount, uint256 escrowDeadline, address escrowToken, bool escrowClaimed) = escrow.getEscrowDetails(0);
-        assertEq(escrowSender, sender);
-        assertEq(escrowRecipient, recipient);
-        assertEq(escrowAmount, amount);
-        assertEq(escrowToken, address(token));
-        assertFalse(escrowClaimed);
-    }
-
-    function testClaimEscrowERC20() public {
-        uint256 amount = 50 ether;
-
-        // Approve and create escrow
-        vm.prank(sender);
-        token.approve(address(escrow), amount);
-
-        vm.prank(sender);
-        escrow.createEscrow(recipient, amount, address(token));
-
-        // Claim funds
-        vm.prank(recipient);
-        escrow.claimFunds(0);
-
-        // Verify recipient token balance
-        assertEq(token.balanceOf(recipient), amount);
-
-        // Verify escrow marked as claimed
-        (, , , , , bool escrowClaimed) = escrow.getEscrowDetails(0);
-        assertTrue(escrowClaimed);
-    }
-
-    function testRefundEscrowERC20() public {
-        uint256 amount = 50 ether;
-
-        // Approve and create escrow
-        vm.prank(sender);
-        token.approve(address(escrow), amount);
-
-        vm.prank(sender);
-        escrow.createEscrow(recipient, amount, address(token));
-
-        // Advance time beyond deadline
-        vm.warp(block.timestamp + 31 days);
-
-        // Refund funds
-        vm.prank(sender);
-        escrow.refundFunds(0);
-
-        // Verify sender token balance
-        assertEq(token.balanceOf(sender), amount);
-
-        // Verify escrow marked as claimed
-        (, , , , , bool escrowClaimed) = escrow.getEscrowDetails(0);
-        assertTrue(escrowClaimed);
+        Escrow.EscrowDetails memory escrowDetails = escrow.getEscrowDetails(escrowId);
+        assert(escrowDetails.sender == sender);
+        assert(escrowDetails.recipient == recipient);
+        assert(escrowDetails.amount == amount);
+        assert(escrowDetails.token == address(token));
+        assert(escrowDetails.claimed == false);
     }
 }
